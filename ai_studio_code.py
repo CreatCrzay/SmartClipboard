@@ -1035,10 +1035,6 @@ class HotkeyHookWorker(QThread):
         super().__init__()
         self.hook = None
         self.hook_proc = None
-        self._win_pressed = False
-        self._v_pressed = False
-        self._win_v_intercepted = False
-        self._lock = Lock()
         self._running = True
 
     def run(self):
@@ -1046,86 +1042,68 @@ class HotkeyHookWorker(QThread):
         msg = wintypes.MSG()
         while self._running:
             try:
-                peek_result = user32.PeekMessageW(ctypes.byref(msg), 0, 0, 0, 1)
-                if peek_result:
+                # 使用 PeekMessage 保持消息循环，防止界面卡顿
+                if user32.PeekMessageW(ctypes.byref(msg), 0, 0, 0, 1):
                     user32.TranslateMessage(ctypes.byref(msg))
                     user32.DispatchMessageW(ctypes.byref(msg))
-            except:
+            except Exception:
                 break
-            time.sleep(0.01)
+            time.sleep(0.005)
     
     def _setup_hook(self):
         self.hook_proc = HOOKPROC(self._keyboard_hook_proc)
         self.hook = user32.SetWindowsHookExW(WH_KEYBOARD_LL, self.hook_proc, 0, 0)
     
+    def _send_dummy_key(self):
+        """
+        使用 keybd_event 发送 Ctrl 按下和松开。
+        keybd_event 比 SendInput 更简单，不容易出现 ctypes 结构体对齐问题。
+        这会让系统认为 Win 键是作为组合键使用的（Win+Ctrl），从而禁止开始菜单。
+        """
+        try:
+            # 0x11 是 VK_CONTROL
+            # 参数: (VirtualKey, ScanCode, Flags, ExtraInfo)
+            # 0 = KeyDown, 2 = KeyUp
+            user32.keybd_event(0x11, 0, 0, 0) # Ctrl Down
+            user32.keybd_event(0x11, 0, 2, 0) # Ctrl Up
+        except Exception:
+            pass
+
     def _keyboard_hook_proc(self, nCode, wParam, lParam):
         try:
             if nCode >= 0:
                 kb_data = ctypes.cast(lParam, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
                 vk_code = kb_data.vkCode
+                
+                # 检测 Win 键状态 (High bit set = Pressed)
                 win_pressed = (user32.GetAsyncKeyState(VK_LWIN) & 0x8000 != 0) or \
                               (user32.GetAsyncKeyState(VK_RWIN) & 0x8000 != 0)
                 
-                with self._lock:
-                    if wParam in (WM_KEYDOWN, WM_SYSKEYDOWN):
-                        if vk_code == VK_V and win_pressed:
-                            self._v_pressed = True
-                            self._win_v_intercepted = True
-                            self.hotkey_triggered.emit()
-                            return 1
-                        elif vk_code == VK_V:
-                            self._v_pressed = True
-                        elif vk_code in (VK_LWIN, VK_RWIN):
-                            self._win_pressed = True
+                if wParam in (WM_KEYDOWN, WM_SYSKEYDOWN):
+                    # 检测到 Win + V
+                    if vk_code == VK_V and win_pressed:
+                        # 1. 立即发送 Dummy Key (Ctrl)
+                        # 这告诉 Windows: "Win键正在参与组合键操作"，因此松开时不要弹菜单
+                        self._send_dummy_key()
+
+                        # 2. 触发你的业务逻辑
+                        self.hotkey_triggered.emit()
+                        
+                        # 3. 拦截 V 键 (返回 1 表示吞掉事件)
+                        return 1
                     
-                    elif wParam in (WM_KEYUP, WM_SYSKEYUP):
-                        if vk_code == VK_V:
-                            self._v_pressed = False
-                            if self._win_v_intercepted:
-                                self._win_v_intercepted = False
-                                self._send_win_key_up_later()
-                        elif vk_code in (VK_LWIN, VK_RWIN) and self._win_v_intercepted:
-                            if self._v_pressed:
-                                return 1
-        except Exception as e:
+                elif wParam in (WM_KEYUP, WM_SYSKEYUP):
+                    if vk_code == VK_V:
+                        # 拦截 V 键松开，防止泄露
+                        return 1
+                    
+                    # 绝对不要拦截 Win 键松开，让物理按键自然释放
+                    # 由于我们在按下时已经发送了 Ctrl，系统会认为这是一次组合键操作，
+                    # 这里的 Win 键松开不会触发开始菜单。
+
+        except Exception:
             pass
         return user32.CallNextHookEx(self.hook, nCode, wParam, lParam)
-    
-    def _send_win_key_up_later(self):
-        def send_event():
-            time.sleep(0.1)
-            self._send_win_key_up()
-        import threading
-        thread = threading.Thread(target=send_event)
-        thread.daemon = True
-        thread.start()
-    
-    def _send_win_key_up(self):
-        try:
-            class KEYBDINPUT(ctypes.Structure):
-                _fields_ = [
-                    ("wVk", wintypes.WORD),
-                    ("wScan", wintypes.WORD),
-                    ("dwFlags", wintypes.DWORD),
-                    ("time", wintypes.DWORD),
-                    ("dwExtraInfo", ctypes.c_void_p)
-                ]
-            class INPUT(ctypes.Structure):
-                class _INPUT(ctypes.Union):
-                    _fields_ = [("ki", KEYBDINPUT)]
-                _anonymous_ = ("_input",)
-                _fields_ = [
-                    ("type", wintypes.DWORD),
-                    ("_input", _INPUT)
-                ]
-            inputs = INPUT()
-            inputs.type = 1
-            inputs.ki.wVk = VK_LWIN
-            inputs.ki.dwFlags = 2
-            inputs.ki.dwExtraInfo = ctypes.c_void_p(0)
-            user32.SendInput(1, ctypes.byref(inputs), ctypes.sizeof(INPUT))
-        except Exception as e:
-            pass
     
     def stop_hook(self):
         self._running = False
@@ -2617,7 +2595,38 @@ class SmartClipboardApp(MainWindowUI):
             self.hotkey_listener.stop_listening()
         QApplication.quit()
 
+    def _force_release_win_key(self):
+        """双重保险：检测如果 Win 键逻辑上卡住，强制发送弹起信号"""
+        try:
+            # 检查 Win 键 (LWIN=0x5B, RWIN=0x5C) 是否被系统认为处于按下状态
+            if (ctypes.windll.user32.GetAsyncKeyState(0x5B) & 0x8000) or \
+               (ctypes.windll.user32.GetAsyncKeyState(0x5C) & 0x8000):
+                
+                # 定义结构体（如果前面没有全局定义，这里局部定义即可）
+                class KEYBDINPUT(ctypes.Structure):
+                    _fields_ = [("wVk", wintypes.WORD), ("wScan", wintypes.WORD),
+                                ("dwFlags", wintypes.DWORD), ("time", wintypes.DWORD),
+                                ("dwExtraInfo", ctypes.c_void_p)]
+                class INPUT(ctypes.Structure):
+                    class _INPUT(ctypes.Union): _fields_ = [("ki", KEYBDINPUT)]
+                    _anonymous_ = ("_input",)
+                    _fields_ = [("type", wintypes.DWORD), ("_input", _INPUT)]
+                
+                # 发送 Win Up
+                inputs = (INPUT * 1)()
+                inputs[0].type = 1
+                inputs[0].ki.wVk = 0x5B # LWIN
+                inputs[0].ki.dwFlags = 2 # KEYUP
+                ctypes.windll.user32.SendInput(1, inputs, ctypes.sizeof(INPUT))
+                logging.info("Detected stuck Win key, forced release.")
+        except Exception:
+            pass
+
     def show_and_position_window_on_hotkey(self, from_tray=False, force_center=False):
+        # 1. 先执行保险措施，防止按键状态错乱
+        if not from_tray:
+            self._force_release_win_key()
+
         if self._is_settings_dialog_open: return
 
         if self.isVisible():
