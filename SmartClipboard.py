@@ -21,16 +21,18 @@ from pathlib import Path
 from PySide6.QtWidgets import (
     QApplication, QSystemTrayIcon, QMessageBox, QFileDialog, QDialog, QStyle, QMenu,
     QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, QLabel, QPushButton, QScrollArea,
-    QFrame, QCheckBox, QSizePolicy, QComboBox, QSpinBox, QListView, QStyledItemDelegate
+    QFrame, QCheckBox, QSizePolicy, QComboBox, QSpinBox, QListView, QStyledItemDelegate,
+    QLineEdit
 )
 from PySide6.QtGui import (
     QAction, QIcon, QImage, QCursor, QPainter, QColor, QKeySequence,
-    QPixmap, QFont, QFontMetrics, QPen
+    QPixmap, QFont, QFontMetrics, QPen, QKeyEvent
 )
 from PySide6.QtCore import (
     Signal, QTimer, QByteArray, QMimeData, QUrl, QBuffer, QObject, Qt,
     QPoint, QFileInfo, QThread, QRunnable, QThreadPool, QMetaObject, Q_ARG,
-    QAbstractListModel, QModelIndex, QSize, QItemSelectionModel
+    QAbstractListModel, QModelIndex, QSize, QItemSelectionModel, QSortFilterProxyModel,
+    QEvent
 )
 
 # Third-party Imports
@@ -734,6 +736,25 @@ def get_tray_menu_style():
         }}
     """
 
+def get_search_bar_style():
+    return f"""
+        QLineEdit {{
+            background-color: {COLOR_CARD_BG};
+            color: {COLOR_TEXT_PRIMARY};
+            border: 1px solid {COLOR_BORDER};
+            border-radius: 4px;
+            padding: 4px 8px;
+            font-size: 12px;
+            font-family: "{FONT_FAMILY_ENGLISH}";
+        }}
+        QLineEdit:focus {{
+            border: 1px solid {COLOR_BUTTON_HOVER};
+        }}
+        QLineEdit:placeholder {{
+            color: #888888;
+        }}
+    """
+
 
 # ============================================================
 # Section: Settings
@@ -1036,6 +1057,13 @@ class HotkeyHookWorker(QThread):
         self.hook = None
         self.hook_proc = None
         self._running = True
+        self._v_pressed = False  # 新增：用于防抖和防止自动重复
+        # 定义虚拟键码
+        self.VK_V = 0x56
+        self.VK_LWIN = 0x5B
+        self.VK_RWIN = 0x5C
+        # 使用 0xFF 作为欺骗键，它通常未被定义，不会触发 Ctrl 相关的快捷键
+        self.VK_DUMMY = 0xFF 
 
     def run(self):
         self._setup_hook()
@@ -1056,16 +1084,16 @@ class HotkeyHookWorker(QThread):
     
     def _send_dummy_key(self):
         """
-        使用 keybd_event 发送 Ctrl 按下和松开。
-        keybd_event 比 SendInput 更简单，不容易出现 ctypes 结构体对齐问题。
-        这会让系统认为 Win 键是作为组合键使用的（Win+Ctrl），从而禁止开始菜单。
+        发送一个无意义的按键事件 (0xFF)。
+        目的：欺骗 Windows，让它认为 Win 键处于组合键状态，
+        从而在 Win 键松开时不要弹出开始菜单。
+        相比 Ctrl，0xFF 不会触发 PowerToys 或输入法切换。
         """
         try:
-            # 0x11 是 VK_CONTROL
-            # 参数: (VirtualKey, ScanCode, Flags, ExtraInfo)
+            # keybd_event 参数: (bVk, bScan, dwFlags, dwExtraInfo)
             # 0 = KeyDown, 2 = KeyUp
-            user32.keybd_event(0x11, 0, 0, 0) # Ctrl Down
-            user32.keybd_event(0x11, 0, 2, 0) # Ctrl Up
+            user32.keybd_event(self.VK_DUMMY, 0, 0, 0) # Dummy Down
+            user32.keybd_event(self.VK_DUMMY, 0, 2, 0) # Dummy Up
         except Exception:
             pass
 
@@ -1075,31 +1103,33 @@ class HotkeyHookWorker(QThread):
                 kb_data = ctypes.cast(lParam, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
                 vk_code = kb_data.vkCode
                 
-                # 检测 Win 键状态 (High bit set = Pressed)
-                win_pressed = (user32.GetAsyncKeyState(VK_LWIN) & 0x8000 != 0) or \
-                              (user32.GetAsyncKeyState(VK_RWIN) & 0x8000 != 0)
-                
-                if wParam in (WM_KEYDOWN, WM_SYSKEYDOWN):
-                    # 检测到 Win + V
-                    if vk_code == VK_V and win_pressed:
-                        # 1. 立即发送 Dummy Key (Ctrl)
-                        # 这告诉 Windows: "Win键正在参与组合键操作"，因此松开时不要弹菜单
-                        self._send_dummy_key()
+                # 检测消息类型
+                is_down = (wParam == WM_KEYDOWN or wParam == WM_SYSKEYDOWN)
+                is_up = (wParam == WM_KEYUP or wParam == WM_SYSKEYUP)
 
-                        # 2. 触发你的业务逻辑
-                        self.hotkey_triggered.emit()
+                # 处理 V 键
+                if vk_code == self.VK_V:
+                    if is_down:
+                        # 检查 Win 键是否被按下
+                        win_pressed = (user32.GetAsyncKeyState(self.VK_LWIN) & 0x8000 != 0) or \
+                                      (user32.GetAsyncKeyState(self.VK_RWIN) & 0x8000 != 0)
                         
-                        # 3. 拦截 V 键 (返回 1 表示吞掉事件)
-                        return 1
-                    
-                elif wParam in (WM_KEYUP, WM_SYSKEYUP):
-                    if vk_code == VK_V:
-                        # 拦截 V 键松开，防止泄露
-                        return 1
-                    
-                    # 绝对不要拦截 Win 键松开，让物理按键自然释放
-                    # 由于我们在按下时已经发送了 Ctrl，系统会认为这是一次组合键操作，
-                    # 这里的 Win 键松开不会触发开始菜单。
+                        if win_pressed:
+                            # 核心逻辑：如果是第一次按下（不是按住不放产生的重复）
+                            if not self._v_pressed:
+                                self._v_pressed = True
+                                self._send_dummy_key() # 抑制开始菜单
+                                self.hotkey_triggered.emit() # 触发业务逻辑
+                            
+                            # 无论是否重复，都拦截 V 键，防止输入到前台窗口
+                            return 1
+                            
+                    elif is_up:
+                        # V 键松开，重置状态，允许下一次触发
+                        # 这里我们只拦截我们处理过的 V 键
+                        if self._v_pressed:
+                            self._v_pressed = False
+                            return 1
 
         except Exception:
             pass
@@ -1760,6 +1790,10 @@ class MainWindowUI(QMainWindow):
         self._setup_header()
         self.main_layout.addWidget(self.title_bar)
 
+        # 设置搜索栏
+        self._setup_search_bar()
+        self.main_layout.addWidget(self.search_bar_container)
+
         content_layout = QVBoxLayout()
         content_layout.setContentsMargins(
             PADDING_LEFT + BORDER_WIDTH,
@@ -1788,6 +1822,33 @@ class MainWindowUI(QMainWindow):
         self.title_bar = TitleBar()
         self.title_bar.settings_requested.connect(self.settings_requested.emit)
         self.title_bar.close_requested.connect(self.hide)
+
+    def _setup_search_bar(self):
+        """设置搜索框"""
+        # 创建搜索框容器，用于居中显示
+        self.search_bar_container = QWidget()
+        self.search_bar_container.setObjectName("search_bar_container")
+        search_bar_layout = QHBoxLayout(self.search_bar_container)
+        search_bar_layout.setContentsMargins(0, 0, 0, 0)
+        search_bar_layout.setSpacing(0)
+        
+        # 添加左侧弹性空间
+        search_bar_layout.addStretch()
+        
+        self.search_bar = QLineEdit()
+        self.search_bar.setPlaceholderText("搜索")
+        self.search_bar.setFixedHeight(28)
+        self.search_bar.setFixedWidth(CARD_WIDTH_FIXED)
+        self.search_bar.setStyleSheet(get_search_bar_style())
+        self.search_bar.setObjectName("search_bar")
+        search_bar_layout.addWidget(self.search_bar)
+        
+        # 添加右侧弹性空间
+        search_bar_layout.addStretch()
+        
+        # 默认隐藏
+        self.search_bar_container.hide()
+        return self.search_bar_container
 
     def _setup_card_area(self):
             self.scroll_area = QScrollArea()
@@ -1912,8 +1973,14 @@ class SmartClipboardApp(MainWindowUI):
         self.model = ClipboardModel(self)
         self.delegate = ClipboardDelegate(self)
         
+        # 设置搜索过滤器
+        self.proxy_model = QSortFilterProxyModel(self)
+        self.proxy_model.setSourceModel(self.model)
+        self.proxy_model.setFilterCaseSensitivity(Qt.CaseInsensitive)
+        self.proxy_model.setFilterRole(ClipboardModel.RoleContentPreview)
+        
         # 绑定到 View
-        self.list_view.setModel(self.model)
+        self.list_view.setModel(self.proxy_model)
         self.list_view.setItemDelegate(self.delegate)
         
         # 处理点击事件
@@ -1931,6 +1998,16 @@ class SmartClipboardApp(MainWindowUI):
         self.info_message_requested.connect(self._show_info_message_ui)
         self.warning_message_requested.connect(self._show_warning_message_ui)
         self.question_message_requested.connect(self._show_question_message_ui_slot)
+
+        # 连接搜索框信号
+        self.search_bar.textChanged.connect(self._on_search_text_changed)
+        self.search_bar.returnPressed.connect(self._on_search_return_pressed)
+        
+        # 安装事件过滤器用于Ctrl+F快捷键
+        # 安装到主窗口以确保在窗口激活时也能捕获Ctrl+F
+        self.list_view.installEventFilter(self)
+        self.search_bar.installEventFilter(self)
+        self.installEventFilter(self)
 
         self.setup_tray_icon()
         self.load_clips_from_db()
@@ -1968,6 +2045,63 @@ class SmartClipboardApp(MainWindowUI):
         # 替换 list_view 的按键事件处理
         self.list_view.keyPressEvent = custom_list_key_press
         # === 新增代码结束 ===
+
+    def eventFilter(self, obj, event):
+        """事件过滤器，处理Ctrl+F快捷键和搜索框的Escape键"""
+        if event.type() == QEvent.Type.KeyPress:
+            key_event = QKeyEvent(event)
+            if key_event.key() == Qt.Key_F and (key_event.modifiers() & Qt.ControlModifier):
+                self._toggle_search_bar()
+                return True
+            # 处理搜索框的Escape键
+            if obj == self.search_bar and key_event.key() == Qt.Key_Escape:
+                self._on_search_escape()
+                return True
+        return super().eventFilter(obj, event)
+
+    def _toggle_search_bar(self):
+        """切换搜索框的显示/隐藏"""
+        if self.search_bar_container.isVisible():
+            self.search_bar_container.hide()
+            self.search_bar.clear()
+            self.proxy_model.setFilterFixedString("")
+        else:
+            self.search_bar_container.show()
+            self.search_bar.setFocus()
+            self.search_bar.selectAll()
+
+    def _on_search_text_changed(self, text):
+        """搜索文本变化时的处理"""
+        self.proxy_model.setFilterFixedString(text)
+        # 如果有搜索结果，选中第一项
+        if self.proxy_model.rowCount() > 0:
+            first_index = self.proxy_model.index(0, 0)
+            if first_index.isValid():
+                self.list_view.setCurrentIndex(first_index)
+                self.list_view.selectionModel().select(
+                    first_index,
+                    QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows
+                )
+
+    def _on_search_return_pressed(self):
+        """搜索框按回车键时粘贴选中的项"""
+        current_index = self.list_view.currentIndex()
+        if current_index.isValid():
+            # 将代理模型的索引转换为源模型的索引
+            source_index = self.proxy_model.mapToSource(current_index)
+            if source_index.isValid():
+                self._on_list_item_clicked(source_index)
+
+    def _clear_search_state(self):
+        """清除搜索框状态：隐藏搜索框、清除搜索文本、重置过滤"""
+        self.search_bar_container.hide()
+        self.search_bar.clear()
+        self.proxy_model.setFilterFixedString("")
+        self.list_view.setFocus()
+
+    def _on_search_escape(self):
+        """搜索框按Escape键时隐藏搜索框"""
+        self._clear_search_state()
 
     def _setup_persistence_dirs(self):
         temp_dir_path = os.path.join(self.current_dir, TEMP_DIR_NAME)
@@ -2289,12 +2423,27 @@ class SmartClipboardApp(MainWindowUI):
         # 滚动到顶部
         if self.list_view.verticalScrollBar():
             self.list_view.verticalScrollBar().setValue(0)
+        
+        # 如果有搜索文本，重新应用过滤
+        if self.search_bar_container.isVisible() and self.search_bar.text():
+            self.proxy_model.setFilterFixedString(self.search_bar.text())
+            # 选中第一项
+            if self.proxy_model.rowCount() > 0:
+                first_index = self.proxy_model.index(0, 0)
+                if first_index.isValid():
+                    self.list_view.setCurrentIndex(first_index)
 
     def _on_list_item_clicked(self, index):
         """替代原来的 _on_card_clicked - 处理列表项点击"""
         if not index.isValid():
             return
-            
+        
+        # 如果是代理模型的索引，转换为源模型索引
+        if isinstance(index.model(), QSortFilterProxyModel):
+            index = self.proxy_model.mapToSource(index)
+            if not index.isValid():
+                return
+        
         clip_id = index.data(ClipboardModel.RoleId)
         clip_type = index.data(ClipboardModel.RoleType)
         content = index.data(ClipboardModel.RoleContent)
@@ -2626,7 +2775,11 @@ class SmartClipboardApp(MainWindowUI):
         # 1. 先执行保险措施，防止按键状态错乱
         if not from_tray:
             self._force_release_win_key()
-
+        
+        # 隐藏窗口时清除搜索状态
+        if self.isVisible():
+            self._clear_search_state()
+        
         if self._is_settings_dialog_open: return
 
         if self.isVisible():
@@ -2666,9 +2819,9 @@ class SmartClipboardApp(MainWindowUI):
             # === 新增代码开始：自动选中第一项 ===
             self.list_view.setFocus() # 将键盘焦点给到列表
             
-            if self.model.rowCount() > 0:
+            if self.proxy_model.rowCount() > 0:
                 # 获取第一项的索引
-                first_index = self.model.index(0, 0)
+                first_index = self.proxy_model.index(0, 0)
                 if first_index.isValid():
                     # 设置当前索引 (用于键盘导航的起点)
                     self.list_view.setCurrentIndex(first_index)
