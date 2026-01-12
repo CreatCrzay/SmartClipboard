@@ -2525,6 +2525,7 @@ class SmartClipboardApp(MainWindowUI):
 
                 self.db_manager.update_clip_timestamp(clip_id)
                 self.load_clips_from_db()
+                self._clear_search_state()  # 粘贴后清除搜索状态
                 self.hide()
                 self.paste_timer.start(50)
             else:
