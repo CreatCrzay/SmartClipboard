@@ -68,30 +68,27 @@ COLOR_PINNED_BORDER = "#FFFFFF"
 WINDOW_WIDTH = 300
 WINDOW_HEIGHT = 400
 
-PADDING_LEFT = 6
-PADDING_RIGHT = 3
-
-PADDING_TOP = 5
-PADDING_BOTTOM = 12
+PADDING = 8
 SPACING = 5
-BORDER_RADIUS = 0
+BORDER_RADIUS = 8
 BORDER_WIDTH = 1
 
 CARD_INTERNAL_CONTENT_PADDING = 5
 CARD_INTERNAL_SPACING = 5
-CARD_HEIGHT_FIXED = 78 
+CARD_HEIGHT_FIXED = 78
 
-SCROLLBAR_WIDTH = 3
-SCROLLBAR_SPACING = 5
+SCROLLBAR_WIDTH = 6
+SCROLLBAR_SPACING = 2
 
-CARD_WIDTH_FIXED = WINDOW_WIDTH - PADDING_LEFT - PADDING_RIGHT - (BORDER_WIDTH * 2) - (SCROLLBAR_WIDTH + SCROLLBAR_SPACING) 
+# 卡片宽度：使用统一的内边距
+CARD_WIDTH_FIXED = WINDOW_WIDTH - (PADDING * 2)
 
 FONT_SIZE_TITLE = "15px"
 FONT_SIZE_CARD_CONTENT = "15px"
 FONT_SIZE_BUTTON = "13px"
 
 FONT_FAMILY_ENGLISH = "Consolas"
-FONT_FAMILY_CHINESE = "微软雅黑"
+FONT_FAMILY_CHINESE = "微软雅黑 Light"
 
 ICON_FILE = "📁"  # 文件类型卡片显示的文件图标
 
@@ -310,29 +307,36 @@ class ClipboardDelegate(QStyledItemDelegate):
         self._font.setPixelSize(int(FONT_SIZE_CARD_CONTENT.replace('px', '')))
     
     def paint(self, painter, option, index):
+        # 启用抗锯齿以获得平滑的圆角
+        painter.setRenderHint(QPainter.Antialiasing)
+        
         # 绘制背景
         is_pinned = index.data(ClipboardModel.RoleIsPinned)
-        
+
         # 设置背景色
         bg_color = QColor(COLOR_CARD_BG)
         if option.state & QStyle.State_Selected:
             bg_color = QColor(COLOR_BUTTON_HOVER)
         elif option.state & QStyle.State_MouseOver:
             bg_color = QColor(COLOR_BUTTON_HOVER)
-        
-        painter.fillRect(option.rect, bg_color)
-        
+
+        # 绘制圆角矩形背景
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(bg_color)
+        painter.drawRoundedRect(option.rect, 4, 4)
+
         # 绘制边框（置顶项目）
         if is_pinned:
             pen = QPen(QColor(COLOR_PINNED_BORDER))
             pen.setWidth(BORDER_WIDTH)
             painter.setPen(pen)
-            painter.drawRect(option.rect.adjusted(0, 0, -BORDER_WIDTH, -BORDER_WIDTH))
-        
+            painter.setBrush(Qt.NoBrush)
+            painter.drawRoundedRect(option.rect.adjusted(0, 0, -BORDER_WIDTH, -BORDER_WIDTH), 4, 4)
+
         # 获取数据
         clip_type = index.data(ClipboardModel.RoleType)
         content = index.data(ClipboardModel.RoleContent)
-        
+
         # 绘制内容
         self._draw_content(painter, option, clip_type, content)
     
@@ -342,8 +346,8 @@ class ClipboardDelegate(QStyledItemDelegate):
         x = option.rect.left() + CARD_INTERNAL_CONTENT_PADDING
         y = option.rect.top() + CARD_INTERNAL_CONTENT_PADDING
         
-        # 减去滚动条宽度和左右Padding
-        available_width = option.rect.width() - (CARD_INTERNAL_CONTENT_PADDING * 2) - (SCROLLBAR_WIDTH + SCROLLBAR_SPACING)
+        # 减去左右Padding（悬浮滚动条不占用布局空间）
+        available_width = option.rect.width() - (CARD_INTERNAL_CONTENT_PADDING * 2)
         # 减去上下Padding
         available_height = option.rect.height() - (CARD_INTERNAL_CONTENT_PADDING * 2)
         
@@ -633,21 +637,32 @@ def get_main_window_style():
             background-color: transparent;
             border: none;
         }}
+        /* 悬浮式滚动条 - 默认半透明 */
         QScrollBar:vertical {{
             border: none;
-            background: {COLOR_BACKGROUND};
+            background: transparent;
             width: {SCROLLBAR_WIDTH}px;
             margin: 0px 0px 0px 0px;
-            border-radius: {BORDER_RADIUS // 2}px;
+            border-radius: {SCROLLBAR_WIDTH // 2}px;
         }}
+        /* 滚动条滑块 - 默认半透明 */
         QScrollBar::handle:vertical {{
-            background: {COLOR_BUTTON_HOVER};
+            background: rgba(80, 80, 80, 120);
             min-height: 20px;
-            border-radius: {BORDER_RADIUS // 2}px;
+            border-radius: {SCROLLBAR_WIDTH // 2}px;
+        }}
+        /* 鼠标悬停时滑块变亮 */
+        QScrollBar::handle:vertical:hover {{
+            background: rgba(120, 120, 120, 200);
+        }}
+        /* 按下时更亮 */
+        QScrollBar::handle:vertical:pressed {{
+            background: rgba(150, 150, 150, 255);
         }}
         QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
             border: none;
             background: none;
+            height: 0px;
         }}
         QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
             background: none;
@@ -659,29 +674,30 @@ def get_main_window_style():
 
 def get_title_bar_style():
     return f"""
-        QWidget#title_bar {{
-            background-color: {COLOR_BACKGROUND};
-            border-top-left-radius: {BORDER_RADIUS}px;
-            border-top-right-radius: {BORDER_RADIUS}px;
-            border: none;
-            border-bottom: {BORDER_WIDTH}px solid {COLOR_BORDER};
-        }}
-        QPushButton#settings_button, QPushButton#close_button {{
-            background-color: {COLOR_BACKGROUND};
-            color: {COLOR_TEXT_PRIMARY};
-            border: none;
-            border-radius: 0px;
-            font-size: 14px;
-            font-weight: bold;
-            min-width: 40px;
-            min-height: 24px;
-            max-width: 40px;
-            max-height: 24px;
-        }}
-        QPushButton#settings_button:hover, QPushButton#close_button:hover {{
-            background-color: {COLOR_BUTTON_HOVER};
-        }}
-    """
+QWidget#title_bar {{
+    background-color: {COLOR_BACKGROUND};
+    border-top-left-radius: {BORDER_RADIUS}px;
+    border-top-right-radius: {BORDER_RADIUS}px;
+    border: none;
+    border-bottom: {BORDER_WIDTH}px solid {COLOR_BORDER};
+}}
+QPushButton#settings_button, QPushButton#close_button {{
+    background-color: {COLOR_BACKGROUND};
+    color: {COLOR_TEXT_PRIMARY};
+    border: none;
+    border-radius: 4px;
+    font-size: 14px;
+    font-family: "{FONT_FAMILY_CHINESE}";
+    font-weight: bold;
+    min-width: 32px;
+    min-height: 20px;
+    max-width: 32px;
+    max-height: 20px;
+}}
+QPushButton#settings_button:hover, QPushButton#close_button:hover {{
+    background-color: {COLOR_BUTTON_HOVER};
+}}
+"""
 
 def get_message_box_style():
     return f"""
@@ -1372,6 +1388,182 @@ class AutoConfigManager:
 # Section: UI Widgets
 # ============================================================
 
+class FloatingScrollBar(QWidget):
+    """
+    自定义滚动条组件
+    修改逻辑：
+    1. 移除自动隐藏和透明度动画。
+    2. 当内容超出视图范围时始终显示，否则隐藏。
+    """
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedWidth(SCROLLBAR_WIDTH)
+        self._scroll_bar = None
+        self._is_hovering = False
+        self._is_dragging = False
+        self._drag_start_pos = 0
+        self._drag_start_scroll_value = 0
+        
+        # 默认隐藏，等待绑定滚动条后根据范围决定是否显示
+        self.hide()
+        
+        # 允许鼠标事件穿透（但在我们的新布局逻辑下，它位于右侧空白区，不影响点击）
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
+        self.setCursor(Qt.ArrowCursor)
+        
+    def set_scroll_bar(self, scroll_bar):
+        """绑定到目标滚动条"""
+        self._scroll_bar = scroll_bar
+        if self._scroll_bar:
+            self._scroll_bar.valueChanged.connect(self.update)
+            self._scroll_bar.rangeChanged.connect(self._on_range_changed)
+            # 初始化时检查一次状态
+            self._on_range_changed(self._scroll_bar.minimum(), self._scroll_bar.maximum())
+            self._scroll_bar.installEventFilter(self)
+            
+    def _on_range_changed(self, min_val, max_val):
+        """
+        核心逻辑：
+        当 max_val > min_val 时，说明内容高度超出可视区域 -> 显示滚动条
+        否则 -> 隐藏滚动条
+        """
+        if max_val > min_val:
+            self.show()
+        else:
+            self.hide()
+        self.update()
+
+    def paintEvent(self, event):
+        """绘制滚动条"""
+        if not self._scroll_bar:
+            return
+            
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        # 绘制背景轨道（可选，如果需要更明显的滚动条区域，可以取消注释下面两行）
+        # painter.setBrush(QColor(40, 40, 40))
+        # painter.setPen(Qt.NoPen)
+        # painter.drawRect(self.rect())
+        
+        # 计算滑块位置和大小
+        bar_height = self.height()
+        max_val = self._scroll_bar.maximum()
+        page_step = self._scroll_bar.pageStep() # 可视区域大小
+        
+        # 如果不需要滚动，则不绘制
+        if max_val <= 0:
+            return
+            
+        # 1. 计算滑块长度
+        # 滑块高度占总高度的比例 = 可视区域 / (实际内容高度 + 可视区域)
+        slider_ratio = page_step / (max_val + page_step)
+        slider_height = max(int(bar_height * slider_ratio), 20)  # 限制最小高度为 20px
+        
+        # 2. 计算滑块位置
+        # 滑块移动范围 = 总高度 - 滑块高度
+        # 当前位置比例 = 当前滚动值 / 最大滚动值
+        scroll_ratio = self._scroll_bar.value() / max_val
+        slider_pos = int((bar_height - slider_height) * scroll_ratio)
+        
+        # 3. 设置滑块颜色
+        # 悬停或拖拽时颜色更亮，常态颜色稍暗
+        if self._is_dragging:
+            color = QColor(160, 160, 160)
+        elif self._is_hovering:
+            color = QColor(120, 120, 120)
+        else:
+            color = QColor(80, 80, 80) # 常态颜色
+            
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(color)
+        
+        # 绘制圆角矩形滑块
+        # 参数：x, y, w, h, xRadius, yRadius
+        painter.drawRoundedRect(0, slider_pos, self.width(), slider_height, self.width() // 2, self.width() // 2)
+        
+    def enterEvent(self, event):
+        """鼠标进入，变色"""
+        self._is_hovering = True
+        self.update()
+        
+    def leaveEvent(self, event):
+        """鼠标离开，恢复颜色"""
+        self._is_hovering = False
+        self.update()
+        
+    def mousePressEvent(self, event):
+        """鼠标按下"""
+        if event.button() == Qt.LeftButton and self._scroll_bar:
+            click_y = event.position().y()
+            bar_height = self.height()
+            max_val = self._scroll_bar.maximum()
+            page_step = self._scroll_bar.pageStep()
+            
+            if max_val <= 0: return
+
+            slider_ratio = page_step / (max_val + page_step)
+            slider_height = max(int(bar_height * slider_ratio), 20)
+            
+            scroll_range = bar_height - slider_height
+            if scroll_range <= 0: return # 避免除以零
+            
+            slider_pos = int(scroll_range * (self._scroll_bar.value() / max_val))
+            
+            # 判断点击的是滑块还是轨道
+            if slider_pos <= click_y <= slider_pos + slider_height:
+                # 点击滑块 - 开始拖拽
+                self._is_dragging = True
+                self._drag_start_pos = click_y
+                self._drag_start_scroll_value = self._scroll_bar.value()
+            else:
+                # 点击轨道 - 快速定位
+                # 计算点击位置在可滚动范围内的比例
+                click_ratio = max(0.0, min(1.0, (click_y - slider_height / 2) / scroll_range))
+                new_value = int(max_val * click_ratio)
+                self._scroll_bar.setValue(new_value)
+                
+            self.update()
+            
+    def mouseMoveEvent(self, event):
+        """鼠标拖拽"""
+        if self._is_dragging and self._scroll_bar:
+            current_y = event.position().y()
+            delta_y = current_y - self._drag_start_pos
+            
+            bar_height = self.height()
+            max_val = self._scroll_bar.maximum()
+            page_step = self._scroll_bar.pageStep()
+            
+            slider_ratio = page_step / (max_val + page_step)
+            slider_height = max(int(bar_height * slider_ratio), 20)
+            scroll_range = bar_height - slider_height
+            
+            if scroll_range > 0:
+                # 计算滚动的增量
+                scroll_delta = int(delta_y * max_val / scroll_range)
+                new_value = self._drag_start_scroll_value + scroll_delta
+                # 限制范围
+                new_value = max(0, min(max_val, new_value))
+                self._scroll_bar.setValue(new_value)
+            
+    def mouseReleaseEvent(self, event):
+        """鼠标释放"""
+        if event.button() == Qt.LeftButton:
+            self._is_dragging = False
+            self.update()
+            
+    def eventFilter(self, obj, event):
+        """事件过滤器，处理目标控件的显隐"""
+        if obj == self._scroll_bar:
+            if event.type() == QEvent.Type.Show:
+                # 再次检查范围，防止显示状态不同步
+                self._on_range_changed(self._scroll_bar.minimum(), self._scroll_bar.maximum())
+            elif event.type() == QEvent.Type.Hide:
+                self.hide()
+        return super().eventFilter(obj, event)
+        
 class TitleBar(QWidget):
     settings_requested = Signal()
     close_requested = Signal()
@@ -1383,31 +1575,33 @@ class TitleBar(QWidget):
 
     def _setup_ui(self):
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(BORDER_WIDTH, BORDER_WIDTH, BORDER_WIDTH, BORDER_WIDTH)
-        layout.setSpacing(0)
+        # 边距与卡片内容对齐：PADDING + CARD_INTERNAL_CONTENT_PADDING
+        content_margin = PADDING + CARD_INTERNAL_CONTENT_PADDING
+        layout.setContentsMargins(content_margin, content_margin, content_margin, 4)
+        layout.setSpacing(SPACING)
 
         self.settings_button = QPushButton("设置")
         button_font = QFont(FONT_FAMILY_CHINESE)
-        button_font.setPixelSize(int(FONT_SIZE_BUTTON.replace('px', '')))
+        button_font.setPixelSize(14)
         button_font.setBold(True)
         self.settings_button.setFont(button_font)
-        self.settings_button.setFixedSize(40, 24)
+        self.settings_button.setFixedSize(32, 20)
         self.settings_button.clicked.connect(self.settings_requested.emit)
         self.settings_button.setObjectName("settings_button")
 
         self.close_button = QPushButton("关闭")
         close_font = QFont(FONT_FAMILY_CHINESE)
-        close_font.setPixelSize(int(FONT_SIZE_BUTTON.replace('px', '')))
+        close_font.setPixelSize(14)
         close_font.setBold(True)
         self.close_button.setFont(close_font)
-        self.close_button.setFixedSize(40, 24)
+        self.close_button.setFixedSize(32, 20)
         self.close_button.clicked.connect(self.close_requested.emit)
         self.close_button.setObjectName("close_button")
 
         layout.addWidget(self.settings_button)
         layout.addStretch(1)
         layout.addWidget(self.close_button)
-        
+
         self.setStyleSheet(get_title_bar_style())
 
 class ClipboardCard(QFrame):
@@ -1795,16 +1989,18 @@ class MainWindowUI(QMainWindow):
         self.main_layout.addWidget(self.search_bar_container)
 
         content_layout = QVBoxLayout()
+        # 边距逻辑：侧边距与卡片内容对齐，下边距与侧边距相等
+        content_margin = PADDING + CARD_INTERNAL_CONTENT_PADDING
         content_layout.setContentsMargins(
-            PADDING_LEFT + BORDER_WIDTH,
-            PADDING_TOP + BORDER_WIDTH,
-            PADDING_RIGHT + BORDER_WIDTH,
-            PADDING_BOTTOM + BORDER_WIDTH
+            PADDING,
+            0,
+            PADDING,
+            content_margin
         )
         content_layout.setSpacing(SPACING)
 
         self._setup_card_area()
-        content_layout.addWidget(self.scroll_area)
+        content_layout.addWidget(self.scroll_container)
         self.main_layout.addLayout(content_layout)
 
         self.setStyleSheet(get_main_window_style())
@@ -1851,78 +2047,98 @@ class MainWindowUI(QMainWindow):
         return self.search_bar_container
 
     def _setup_card_area(self):
-            self.scroll_area = QScrollArea()
-            self.scroll_area.setWidgetResizable(True)
-            self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-            self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        # 创建一个容器widget来放置scroll_area
+        self.scroll_container = QWidget()
+        self.scroll_container.setObjectName("scroll_container")
+        scroll_container_layout = QHBoxLayout(self.scroll_container)
+        scroll_container_layout.setContentsMargins(0, 0, 0, 0)
+        scroll_container_layout.setSpacing(0)
 
-            # 使用 QListView 替代卡片容器
-            self.list_view = QListView()
-            self.list_view.setObjectName("list_view")
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        # 隐藏垂直滚动条，使用自定义悬浮滚动条
+        self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
-            # 关键设置1：确保按“项目”进行滚动，而不是按像素
-            self.list_view.setVerticalScrollMode(QListView.ScrollPerItem)
+        # 使用 QListView 替代卡片容器
+        self.list_view = QListView()
+        self.list_view.setObjectName("list_view")
+        self.list_view.setVerticalScrollMode(QListView.ScrollPerItem)
+        self.list_view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.list_view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.list_view.setSpacing(SPACING)
+        self.list_view.setCursor(Qt.PointingHandCursor)
 
-            self.list_view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-            self.list_view.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-            self.list_view.setSpacing(SPACING)
-            self.list_view.setCursor(Qt.PointingHandCursor)
+        # 滚轮事件补丁 (保持原样)
+        def custom_wheel_event(event):
+            v_scrollbar = self.list_view.verticalScrollBar()
+            delta = event.angleDelta().y()
+            if delta == 0: return
+            scroll_step = 2
+            current_value = v_scrollbar.value()
+            if delta > 0:
+                new_value = max(0, current_value - scroll_step)
+            else:
+                new_value = min(v_scrollbar.maximum(), current_value + scroll_step)
+            v_scrollbar.setValue(new_value)
+            event.accept()
 
-            # ============================================================
-            # 补丁：自定义滚轮事件，实现一次滚动 2 行
-            # ============================================================
-            def custom_wheel_event(event):
-                # 获取垂直滚动条
-                v_scrollbar = self.list_view.verticalScrollBar()
+        self.list_view.wheelEvent = custom_wheel_event
 
-                # 获取滚轮滚动的角度 delta (通常 120 或 -120)
-                delta = event.angleDelta().y()
+        # 样式 (保持原样)
+        self.list_view.setStyleSheet(f"""
+            QListView {{
+                background-color: {COLOR_BACKGROUND};
+                border: none;
+                outline: none;
+            }}
+            QListView::item {{
+                background-color: transparent;
+                border: none;
+            }}
+            QListView::item:selected {{
+                background-color: {COLOR_BUTTON_HOVER};
+                border: none;
+            }}
+        """)
 
-                if delta == 0:
-                    return
+        self.scroll_area.setWidget(self.list_view)
+        scroll_container_layout.addWidget(self.scroll_area)
 
-                # 定义一次滚动的行数
-                scroll_step = 2
+        # ==================== 核心修改开始 ====================
+        
+        # 1. 将父对象改为 self (MainWindow)，使其脱离 content_layout 的束缚
+        self.floating_scrollbar = FloatingScrollBar(self) 
+        self.floating_scrollbar.set_scroll_bar(self.list_view.verticalScrollBar())
+        self.floating_scrollbar.raise_()  # 确保在最顶层
 
-                # 当前滚动条的位置（在 ScrollPerItem 模式下，这就是行号）
-                current_value = v_scrollbar.value()
+        # 2. 定义更新位置的函数
+        def update_scrollbar_geometry():
+            if not hasattr(self, 'floating_scrollbar') or not self.floating_scrollbar:
+                return
+            
+            # 计算 scroll_container 在主窗口中的相对位置
+            container_pos = self.scroll_container.mapTo(self, QPoint(0, 0))
+            
+            # X轴：放置在窗口最右侧的空白边距中
+            x = self.width() - SCROLLBAR_WIDTH - 2
+            
+            # 【核心修改】：在计算 Y 轴时加上 SPACING (5px) 的偏移量
+            # 这样滚动条就会比容器起始位置低 5px，从而与卡片顶部视觉对齐
+            y = container_pos.y() + SPACING
+            
+            # 【核心修改】：高度减去 (SPACING * 2)，即减去顶部和底部的空隙
+            # 确保滚动条在垂直方向上居中于容器，底部也不会贴边
+            h = self.scroll_container.height() - (SPACING * 2)
+            
+            self.floating_scrollbar.setGeometry(x, y, SCROLLBAR_WIDTH, h)
 
-                if delta > 0:
-                    # 向上滚动 (滚轮向前)
-                    new_value = max(0, current_value - scroll_step)
-                else:
-                    # 向下滚动 (滚轮向后)
-                    new_value = min(v_scrollbar.maximum(), current_value +  scroll_step)
-
-                # 应用新位置
-                v_scrollbar.setValue(new_value)
-
-                # 接受事件，防止父类处理（否则会产生双重滚动或默认滚动）
-                event.accept()
-
-            # 将自定义方法绑定到实例上 (Monkey Patching)
-            self.list_view.wheelEvent = custom_wheel_event
-            # ============================================================
-
-            # 设置列表容器的样式
-            self.list_view.setStyleSheet(f"""
-                QListView {{
-                    background-color: {COLOR_BACKGROUND};
-                    border: none;
-                    outline: none;
-                }}
-                QListView::item {{
-                    background-color: transparent;
-                    border: none;
-                }}
-                QListView::item:selected {{
-                    background-color: {COLOR_BUTTON_HOVER};
-                    border: none;
-                }}
-            """)
-
-            self.scroll_area.setWidget(self.list_view)
-
+        # 3. 绑定事件：当容器大小改变(Resize)或位置改变(Move)时，同步更新滚动条
+        # 例如：切换搜索栏显示时，容器位置会下移，滚动条必须跟随
+        self.scroll_container.resizeEvent = lambda event: update_scrollbar_geometry()
+        self.scroll_container.moveEvent = lambda event: update_scrollbar_geometry()
+        
+        # ==================== 核心修改结束 ====================
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
             self._is_dragging = True
