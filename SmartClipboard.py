@@ -515,6 +515,10 @@ class ClipboardDelegate(QStyledItemDelegate):
 def get_settings_dialog_style():
     return f"""
         QDialog {{
+            background-color: transparent;
+            border: none;
+        }}
+        #settings_container {{
             background-color: {COLOR_BACKGROUND};
             border: 1px solid {COLOR_BORDER};
             border-radius: {BORDER_RADIUS}px;
@@ -1856,13 +1860,25 @@ class SettingsDialog(QDialog):
         self.settings_manager = settings_manager
         self.setModal(True)
         self.setFixedSize(220, 160)
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)  
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
+        # 启用透明背景，让圆角效果正确显示
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
         self._init_ui()
         self._load_settings_to_ui()
         self.setStyleSheet(get_settings_dialog_style())
         
     def _init_ui(self):
-        layout = QVBoxLayout(self)
+        # 创建一个容器widget作为实际的内容区域，用于显示背景和圆角
+        self.container_widget = QWidget(self)
+        self.container_widget.setObjectName("settings_container")
+        
+        # 主布局使用透明背景
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.addWidget(self.container_widget)
+        
+        # 内容布局添加到容器
+        layout = QVBoxLayout(self.container_widget)
         layout.setSpacing(8)
         layout.setContentsMargins(15, 15, 15, 15)
         
