@@ -1317,11 +1317,19 @@ class WindowHistoryManager(QObject):
                 continue
 
 class AutoConfigManager:
-    """自动配置自启动管理器 - 通过查询计划任务状态判断是否已配置"""
+    """自动配置自启动管理器 - 通过查询计划任务状态判断是否已配置，支持路径变更自动修复"""
     TASK_NAME = "SmartClipboardAutostart"
 
     def __init__(self):
         pass
+
+    @staticmethod
+    def get_current_exe_path():
+        """获取当前运行的exe完整路径"""
+        if getattr(sys, 'frozen', False):
+            return sys.executable
+        else:
+            return os.path.abspath(sys.argv[0])
 
     def is_admin(self):
         try:
@@ -1341,40 +1349,67 @@ class AutoConfigManager:
             except Exception:
                 sys.exit(1)
 
-    def is_scheduled_task_exists(self):
-        """查询计划任务是否存在"""
+    def get_scheduled_task_exe_path(self):
+        """获取计划任务中配置的exe路径，返回None表示任务不存在或解析失败"""
         try:
             result = subprocess.run(
-                ['schtasks', '/query', '/tn', self.TASK_NAME, '/fo', 'LIST'],
+                ['schtasks', '/query', '/tn', self.TASK_NAME, '/fo', 'LIST', '/v'],
                 capture_output=True,
                 encoding='gbk',
                 errors='ignore'
             )
-            return result.returncode == 0 and self.TASK_NAME in result.stdout
+            if result.returncode != 0:
+                return None
+
+            # 解析任务信息中的 "Task To Run" 字段
+            for line in result.stdout.split('\n'):
+                if 'Task To Run' in line or '要运行的任务' in line:
+                    # 格式: "Task To Run: C:\\path\\to\\exe.exe"
+                    parts = line.split(':', 1)
+                    if len(parts) == 2:
+                        exe_path = parts[1].strip()
+                        # 移除可能的引号
+                        exe_path = exe_path.strip('"')
+                        return exe_path
+            return None
         except Exception:
+            return None
+
+    def is_task_path_valid(self):
+        """检查计划任务是否存在且路径与当前exe一致"""
+        task_exe_path = self.get_scheduled_task_exe_path()
+        if task_exe_path is None:
             return False
 
+        current_exe_path = self.get_current_exe_path()
+        # 比较路径（不区分大小写）
+        return os.path.normcase(task_exe_path) == os.path.normcase(current_exe_path)
+
+    def delete_scheduled_task(self):
+        """删除计划任务"""
+        try:
+            subprocess.run(
+                ['schtasks', '/delete', '/tn', self.TASK_NAME, '/f'],
+                capture_output=True,
+                encoding='gbk',
+                errors='ignore'
+            )
+        except Exception:
+            pass
+
     def create_scheduled_task(self):
+        """创建计划任务，如果已存在则先删除"""
         if not self.is_admin():
             return False
 
-        if getattr(sys, 'frozen', False):
-            app_exe_path = sys.executable
-        else:
-            app_exe_path = os.path.abspath(sys.argv[0])
-
+        app_exe_path = self.get_current_exe_path()
         if not os.path.exists(app_exe_path):
             return False
 
         current_user = os.getlogin()
 
         # 删除旧任务（如果存在）
-        subprocess.run(
-            ['schtasks', '/delete', '/tn', self.TASK_NAME, '/f'],
-            capture_output=True,
-            encoding='gbk',
-            errors='ignore'
-        )
+        self.delete_scheduled_task()
 
         command = [
             'schtasks', '/create', '/tn', self.TASK_NAME, '/tr', f'"{app_exe_path}"',
@@ -1383,20 +1418,23 @@ class AutoConfigManager:
 
         try:
             subprocess.run(command, capture_output=True, text=True, encoding='gbk', check=True)
+            logging.info(f"AutoConfigManager: Created scheduled task pointing to {app_exe_path}")
             return True
-        except Exception:
+        except Exception as e:
+            logging.error(f"AutoConfigManager: Failed to create scheduled task: {e}")
             return False
 
     def setup_auto_start(self):
-        """设置开机自启：如果计划任务不存在则创建"""
-        # 如果计划任务已存在，无需处理
-        if self.is_scheduled_task_exists():
+        """设置开机自启：如果计划任务不存在或路径不匹配，则重新创建"""
+        # 检查计划任务是否存在且路径正确
+        if self.is_task_path_valid():
+            logging.debug("AutoConfigManager: Scheduled task exists and path is valid.")
             return True
 
-        # 需要管理员权限创建计划任务
+        # 需要管理员权限创建/更新计划任务
         self.run_as_admin_and_exit()
 
-        # 创建计划任务
+        # 创建或更新计划任务
         return self.create_scheduled_task()
 
 
