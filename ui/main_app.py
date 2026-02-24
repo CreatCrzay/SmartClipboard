@@ -838,6 +838,8 @@ class SmartClipboardApp(MainWindowUI):
             self.show_and_position_window_on_hotkey(from_tray=True, force_center=True)
 
     def quit_application(self):
+        self.hide()
+
         if self.paste_timer.isActive():
             self.paste_timer.stop()
         if self.tray_icon:

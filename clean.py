@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-清理脚本：删除项目中的 __pycache__ 目录、temp 目录、.db 数据库文件和 .json 配置文件
+清理脚本：删除项目中的 __pycache__ 目录、temp 目录、.db 数据库文件、.json 配置文件和打包生成的 dist/build 目录
 """
 
 import os
@@ -51,6 +51,21 @@ def find_and_remove_temp_dirs(root_dir):
     return removed
 
 
+def find_and_remove_build_dirs(root_dir):
+    """删除项目根目录下的 dist 和 build 目录"""
+    removed = []
+    for dir_name in ['dist', 'build']:
+        dir_path = Path(root_dir) / dir_name
+        if dir_path.is_dir():
+            try:
+                shutil.rmtree(dir_path)
+                removed.append(str(dir_path))
+                print(f"[已删除] {dir_name} 目录: {dir_path}")
+            except Exception as e:
+                print(f"[错误] 无法删除 {dir_path}: {e}")
+    return removed
+
+
 def main():
     """主函数"""
     # 获取脚本所在目录作为根目录
@@ -71,11 +86,15 @@ def main():
     # 3. 删除 .db 文件
     print("\n>>> 正在清理 .db 数据库文件...")
     db_removed = find_and_remove_by_extension(root_dir, ['.db'])
-    
+
     # 4. 删除 .json 配置文件
     print("\n>>> 正在清理 .json 配置文件...")
     json_removed = find_and_remove_by_extension(root_dir, ['.json'])
-    
+
+    # 5. 删除 dist 和 build 目录
+    print("\n>>> 正在清理 dist 和 build 目录...")
+    build_dirs_removed = find_and_remove_build_dirs(root_dir)
+
     # 统计结果
     print("\n" + "=" * 50)
     print("清理完成！")
@@ -84,7 +103,8 @@ def main():
     print(f"删除的 temp 目录: {len(temp_removed)} 个")
     print(f"删除的 .db 文件: {len(db_removed)} 个")
     print(f"删除的 .json 文件: {len(json_removed)} 个")
-    print(f"总计删除: {len(pycache_removed) + len(temp_removed) + len(db_removed) + len(json_removed)} 项")
+    print(f"删除的 dist/build 目录: {len(build_dirs_removed)} 个")
+    print(f"总计删除: {len(pycache_removed) + len(temp_removed) + len(db_removed) + len(json_removed) + len(build_dirs_removed)} 项")
 
 
 if __name__ == '__main__':
