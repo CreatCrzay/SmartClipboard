@@ -942,7 +942,12 @@ class DatabaseManager:
             self.cursor.execute("DELETE FROM clips WHERE is_pinned = FALSE")
             self.conn.commit()
             deleted_count = self.cursor.rowcount
-            logging.info(f"DatabaseManager: Deleted {deleted_count} unpinned clips.")
+            if deleted_count > 0:
+                # 执行 VACUUM 释放数据库空间
+                self.conn.execute("VACUUM")
+                logging.info(f"DatabaseManager: Deleted {deleted_count} unpinned clips and vacuumed database.")
+            else:
+                logging.info(f"DatabaseManager: Deleted {deleted_count} unpinned clips.")
             return deleted_count > 0
         except sqlite3.Error as e:
             logging.error(f"DatabaseManager: Error deleting all unpinned clips: {e}")
@@ -955,7 +960,12 @@ class DatabaseManager:
             self.cursor.execute("DELETE FROM clips WHERE timestamp < ? AND is_pinned = FALSE", (cutoff_date_str,))
             deleted_count = self.cursor.rowcount
             self.conn.commit()
-            logging.info(f"DatabaseManager: Deleted {deleted_count} old unpinned clips.")
+            if deleted_count > 0:
+                # 执行 VACUUM 释放数据库空间
+                self.conn.execute("VACUUM")
+                logging.info(f"DatabaseManager: Deleted {deleted_count} old unpinned clips and vacuumed database.")
+            else:
+                logging.info(f"DatabaseManager: Deleted {deleted_count} old unpinned clips.")
             return deleted_count
         except sqlite3.Error as e:
             logging.error(f"DatabaseManager: Error deleting old clips: {e}")
@@ -999,6 +1009,8 @@ class DatabaseManager:
 
     def enforce_max_history(self, max_count):
         deleted_clip_ids = []
+        failed_attempts = 0
+        max_failed_attempts = 10  # 限制连续失败次数，避免无限循环
         try:
             self.cursor.execute("SELECT COUNT(*) FROM clips WHERE is_pinned = FALSE")
             unpinned_clips_count = self.cursor.fetchone()[0]
@@ -1010,7 +1022,7 @@ class DatabaseManager:
                 return deleted_clip_ids
             num_to_delete = unpinned_clips_count - effective_max_unpinned_count
             logging.info(f"DatabaseManager: Unpinned clips ({unpinned_clips_count}) exceeds effective max ({effective_max_unpinned_count}). Will attempt to delete {num_to_delete} oldest unpinned clips.")
-            for _ in range(num_to_delete):
+            while len(deleted_clip_ids) < num_to_delete and failed_attempts < max_failed_attempts:
                 self.cursor.execute(
                     "SELECT id FROM clips WHERE is_pinned = FALSE ORDER BY timestamp ASC LIMIT 1"
                 )
@@ -1019,14 +1031,20 @@ class DatabaseManager:
                     clip_id_to_delete = oldest_unpinned_clip[0]
                     if self.delete_clip(clip_id_to_delete):
                         deleted_clip_ids.append(clip_id_to_delete)
+                        failed_attempts = 0  # 重置失败计数
                     else:
-                        logging.warning(f"DatabaseManager: Failed to delete oldest unpinned clip ID {clip_id_to_delete}.")
-                        break
+                        failed_attempts += 1
+                        logging.warning(f"DatabaseManager: Failed to delete oldest unpinned clip ID {clip_id_to_delete} (attempt {failed_attempts}/{max_failed_attempts}). Trying next...")
+                        continue  # 继续尝试删除下一条
                 else:
                     logging.info("DatabaseManager: No more unpinned clips to delete to enforce max history.")
                     break
             if deleted_clip_ids:
-                logging.info(f"DatabaseManager: Enforced max history. Deleted clip IDs: {deleted_clip_ids}")
+                # 执行 VACUUM 释放数据库空间
+                self.conn.execute("VACUUM")
+                logging.info(f"DatabaseManager: Enforced max history. Deleted {len(deleted_clip_ids)} clip(s), database vacuumed.")
+            if failed_attempts >= max_failed_attempts:
+                logging.warning(f"DatabaseManager: Stopped enforcing max history after {max_failed_attempts} consecutive failures.")
             return deleted_clip_ids
 
         except sqlite3.Error as e:
@@ -1299,43 +1317,18 @@ class WindowHistoryManager(QObject):
                 continue
 
 class AutoConfigManager:
-    """自动配置自启动管理器"""
+    """自动配置自启动管理器 - 通过查询计划任务状态判断是否已配置"""
+    TASK_NAME = "SmartClipboardAutostart"
+
     def __init__(self):
-        self.app_data_dir = get_app_data_path()
-        self.config_file = os.path.join(self.app_data_dir, "auto_config.json")
-        self.ensure_app_data_dir()
-        
-    def ensure_app_data_dir(self):
-        try:
-            os.makedirs(self.app_data_dir, exist_ok=True)
-        except (OSError, IOError) as e:
-            pass
-    
-    def is_first_run(self):
-        try:
-            if os.path.exists(self.config_file):
-                with open(self.config_file, 'r', encoding='utf-8') as f:
-                    config = json.load(f)
-                    return not config.get('first_run_completed', False)
-            else:
-                return True
-        except (OSError, IOError, json.JSONDecodeError):
-            return True
-    
-    def mark_first_run_completed(self):
-        try:
-            config = {'first_run_completed': True}
-            with open(self.config_file, 'w', encoding='utf-8') as f:
-                json.dump(config, f, ensure_ascii=False, indent=2)
-        except (OSError, IOError):
-            pass
-    
+        pass
+
     def is_admin(self):
         try:
             return ctypes.windll.shell32.IsUserAnAdmin()
         except:
             return False
-    
+
     def run_as_admin_and_exit(self):
         if not self.is_admin():
             try:
@@ -1345,47 +1338,66 @@ class AutoConfigManager:
                     None, "runas", sys.executable, f'"{script}"', params, 1
                 )
                 sys.exit(0)
-            except Exception as e:
+            except Exception:
                 sys.exit(1)
-    
+
+    def is_scheduled_task_exists(self):
+        """查询计划任务是否存在"""
+        try:
+            result = subprocess.run(
+                ['schtasks', '/query', '/tn', self.TASK_NAME, '/fo', 'LIST'],
+                capture_output=True,
+                encoding='gbk',
+                errors='ignore'
+            )
+            return result.returncode == 0 and self.TASK_NAME in result.stdout
+        except Exception:
+            return False
+
     def create_scheduled_task(self):
         if not self.is_admin():
             return False
-        
+
         if getattr(sys, 'frozen', False):
             app_exe_path = sys.executable
         else:
             app_exe_path = os.path.abspath(sys.argv[0])
-        
+
         if not os.path.exists(app_exe_path):
             return False
-        
+
         current_user = os.getlogin()
-        task_name = "SmartClipboardAutostart"
-        
-        subprocess.run(['schtasks', '/delete', '/tn', task_name, '/f'], capture_output=True, encoding='gbk')
-        
+
+        # 删除旧任务（如果存在）
+        subprocess.run(
+            ['schtasks', '/delete', '/tn', self.TASK_NAME, '/f'],
+            capture_output=True,
+            encoding='gbk',
+            errors='ignore'
+        )
+
         command = [
-            'schtasks', '/create', '/tn', task_name, '/tr', f'"{app_exe_path}"',
+            'schtasks', '/create', '/tn', self.TASK_NAME, '/tr', f'"{app_exe_path}"',
             '/sc', 'ONLOGON', '/ru', current_user, '/rl', 'HIGHEST', '/it', '/f'
         ]
-        
+
         try:
             subprocess.run(command, capture_output=True, text=True, encoding='gbk', check=True)
             return True
         except Exception:
             return False
-    
+
     def setup_auto_start(self):
-        if not self.is_first_run():
+        """设置开机自启：如果计划任务不存在则创建"""
+        # 如果计划任务已存在，无需处理
+        if self.is_scheduled_task_exists():
             return True
+
+        # 需要管理员权限创建计划任务
         self.run_as_admin_and_exit()
-        success = self.create_scheduled_task()
-        if success:
-            self.mark_first_run_completed()
-            return True
-        else:
-            return False
+
+        # 创建计划任务
+        return self.create_scheduled_task()
 
 
 # ============================================================
