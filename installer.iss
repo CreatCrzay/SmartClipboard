@@ -2,7 +2,7 @@
 ; Built with Inno Setup 6
 
 #define MyAppName "SmartClipboard"
-#define MyAppVersion "4.8"
+#define MyAppVersion "4.9"
 #define MyAppPublisher "SmartClipboard"
 #define MyAppExeName "SmartClipboard.exe"
 
@@ -32,7 +32,6 @@ Source: "dist\SmartClipboard\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreve
 Source: "dist\SmartClipboard\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 
 [Run]
