@@ -126,11 +126,26 @@ class SmartClipboardApp(MainWindowUI):
         self._original_list_key_press = self.list_view.keyPressEvent
 
         def custom_list_key_press(event):
-            if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            key = event.key()
+            if key in (Qt.Key_Return, Qt.Key_Enter):
                 index = self.list_view.currentIndex()
                 if index.isValid():
                     self._on_list_item_clicked(index)
                 event.accept()
+            elif key == Qt.Key_Down:
+                # If no item is selected, select the first one
+                current_index = self.list_view.currentIndex()
+                if not current_index.isValid() and self.proxy_model.rowCount() > 0:
+                    first_index = self.proxy_model.index(0, 0)
+                    if first_index.isValid():
+                        self.list_view.setCurrentIndex(first_index)
+                        self.list_view.selectionModel().select(
+                            first_index,
+                            QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows
+                        )
+                    event.accept()
+                else:
+                    self._original_list_key_press(event)
             else:
                 self._original_list_key_press(event)
 
@@ -884,7 +899,7 @@ class SmartClipboardApp(MainWindowUI):
         if not from_tray:
             self._force_release_win_key()
 
-        # Clear search state when hiding window
+        # Clear search state when hiding window or opening from tray
         if self.isVisible():
             self._clear_search_state()
 
@@ -894,6 +909,9 @@ class SmartClipboardApp(MainWindowUI):
         if self.isVisible():
             self.hide()
         else:
+            # Clear search state when opening from tray
+            if from_tray:
+                self._clear_search_state()
             self.load_clips_from_db()
             screen = QApplication.primaryScreen()
             if not screen:
@@ -926,14 +944,7 @@ class SmartClipboardApp(MainWindowUI):
             self.raise_()
             self.activateWindow()
 
-            # Auto-select first item
+            # Set focus to list view but do not auto-select any item
             self.list_view.setFocus()
-
-            if self.proxy_model.rowCount() > 0:
-                first_index = self.proxy_model.index(0, 0)
-                if first_index.isValid():
-                    self.list_view.setCurrentIndex(first_index)
-                    self.list_view.selectionModel().select(
-                        first_index,
-                        QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows
-                    )
+            self.list_view.clearSelection()
+            self.list_view.setCurrentIndex(self.proxy_model.index(-1, -1))

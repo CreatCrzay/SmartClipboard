@@ -17,6 +17,10 @@ from core.image_cache import get_cached_scaled_image
 from models import ClipboardModel
 
 
+# 鼠标悬浮时的轻微高亮颜色（比选中更淡）
+COLOR_HOVER_LIGHT = "#3a3a3a"
+
+
 class ClipboardDelegate(QStyledItemDelegate):
     """Clipboard item delegate (Qt Delegate) - custom list item rendering"""
 
@@ -32,12 +36,14 @@ class ClipboardDelegate(QStyledItemDelegate):
         # Draw background
         is_pinned = index.data(ClipboardModel.RoleIsPinned)
 
-        # Set background color
+        # Set background color - 区分选中（方向键/点击）和悬浮（鼠标悬停）
         bg_color = QColor(COLOR_CARD_BG)
         if option.state & QStyle.State_Selected:
+            # 选中状态 - 使用明显的高亮色
             bg_color = QColor(COLOR_BUTTON_HOVER)
         elif option.state & QStyle.State_MouseOver:
-            bg_color = QColor(COLOR_BUTTON_HOVER)
+            # 悬浮状态 - 使用轻微高亮，与选中区分开
+            bg_color = QColor(COLOR_HOVER_LIGHT)
 
         # Draw rounded rectangle background
         painter.setPen(Qt.NoPen)

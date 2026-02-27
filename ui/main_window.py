@@ -102,8 +102,10 @@ class MainWindowUI(QMainWindow):
         self.search_bar = QLineEdit()
         self.search_bar.setPlaceholderText("搜索")
         self.search_bar.setFixedHeight(28)
-        from constants import CARD_WIDTH_FIXED
-        self.search_bar.setFixedWidth(CARD_WIDTH_FIXED)
+        from constants import CARD_WIDTH_FIXED, CARD_INTERNAL_CONTENT_PADDING
+        # 搜索框宽度 = 卡片宽度 - 两侧内部边距
+        search_width = CARD_WIDTH_FIXED - (CARD_INTERNAL_CONTENT_PADDING * 2)+2
+        self.search_bar.setFixedWidth(search_width)
         self.search_bar.setStyleSheet(get_search_bar_style())
         self.search_bar.setObjectName("search_bar")
         search_bar_layout.addWidget(self.search_bar)
@@ -137,6 +139,10 @@ class MainWindowUI(QMainWindow):
         self.list_view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.list_view.setSpacing(SPACING)
         self.list_view.setCursor(Qt.PointingHandCursor)
+
+        # 禁用鼠标自动跟踪，只有点击才选中
+        self.list_view.setMouseTracking(True)  # 开启以显示悬浮效果，但delegate区分颜色
+        self.list_view.setSelectionMode(QListView.SingleSelection)
 
         # Wheel event patch
         def custom_wheel_event(event):

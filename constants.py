@@ -12,7 +12,7 @@ COLOR_PINNED_BORDER = "#FFFFFF"
 
 # Window Dimensions
 WINDOW_WIDTH = 300
-WINDOW_HEIGHT = 400
+WINDOW_HEIGHT = 405
 
 # Spacing & Padding
 PADDING = 8

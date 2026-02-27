@@ -263,14 +263,14 @@ def get_search_bar_style():
         QLineEdit {{
             background-color: {COLOR_CARD_BG};
             color: {COLOR_TEXT_PRIMARY};
-            border: 1px solid {COLOR_BORDER};
+            border: none;
             border-radius: 4px;
             padding: 4px 8px;
             font-size: 12px;
             font-family: "{FONT_FAMILY_ENGLISH}";
         }}
         QLineEdit:focus {{
-            border: 1px solid {COLOR_BUTTON_HOVER};
+            border: none;
         }}
         QLineEdit:placeholder {{
             color: #888888;

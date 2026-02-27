@@ -2,7 +2,7 @@
 ; Built with Inno Setup 6
 
 #define MyAppName "SmartClipboard"
-#define MyAppVersion "4.9"
+#define MyAppVersion "5.0"
 #define MyAppPublisher "SmartClipboard"
 #define MyAppExeName "SmartClipboard.exe"
 
