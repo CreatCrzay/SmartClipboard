@@ -24,6 +24,7 @@ SmartClipboard 是一款基于 Python 和 PySide6 开发的 Windows 桌面剪贴
 - `main_app.py` - 主业务逻辑类，继承自 `MainWindowUI`。处理剪贴板监控、数据提取、粘贴操作和搜索功能
 - `main_window.py` - 基础 UI 类，包含窗口设置、自定义滚动行为和拖拽移动功能
 - `delegate.py` - `ClipboardDelegate`: 自定义 QStyledItemDelegate，用于在 QListView 中渲染剪贴板项目（文本/图像/文件）
+
 - `widgets.py` - 自定义组件：`FloatingScrollBar`、`TitleBar`、`ClipboardCard`（旧版）
 - `dialogs.py` - `SettingsDialog`: 无边框设置对话框，提供自动清理和历史记录限制选项
 - `styles.py` - 集中管理的 QSS 样式表，用于所有 UI 组件
@@ -72,12 +73,13 @@ pyinstaller SmartClipboard.spec
 
 - `.spec` 文件手动配置，排除不必要的 Qt 模块（WebEngine、Multimedia 等）以减小二进制体积
 - `icon.png` 必须存在于项目根目录（被 spec 文件和代码引用）
-- PyInstaller 仅收集必要的 PySide6 模块（QtCore、QtGui、QtWidgets）
+
+
 - 应用程序在 `utils.resource_path()` 中使用 `sys._MEIPASS` 检测以实现 PyInstaller 兼容性
 
 ## 数据流
 
-1. **剪贴板监控**：`SmartClipboardApp._on_clipboard_data_changed()` 监听 Qt 的 `dataChanged` 信号
+1. **剪贴板监控**：`SmartClipboardApp._on_clipboard_data_cwhanged()` 监听 Qt 的 `dataChanged` 信号
 2. **数据提取**：`_extract_clipboard_data()` 将内容规范化为三种类型：TEXT、IMAGE、FILES
 3. **去重**：内容哈希与现有项目比较；重复项被移除
 4. **存储**：通过 `DatabaseManager` 序列化到 SQLite
