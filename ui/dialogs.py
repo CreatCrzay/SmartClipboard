@@ -156,11 +156,11 @@ class PreviewDialog(QDialog):
         self.setWindowTitle("预览")
         self.setFixedSize(self.DIALOG_WIDTH, self.DIALOG_HEIGHT)
 
-        # Don't show in taskbar for auto-hide mode
-        if auto_hide:
-            self.setWindowFlags(Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint)
-        else:
-            self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog | Qt.WindowStaysOnTopHint)
+        # Use Qt.Dialog to make it a child dialog, auto-hide will be handled by parent
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog | Qt.WindowStaysOnTopHint)
+
+        # Store relative position for following parent window
+        self._relative_pos = None
 
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self._init_ui()

@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QAction, QKeyEvent, QImage, QImage, QCursor
 from PySide6.QtCore import (
     Qt, QTimer, QByteArray, QMimeData, QUrl, QThreadPool, QRunnable,
-    QMetaObject, Q_ARG, QEvent, QItemSelectionModel, QBuffer
+    QMetaObject, Q_ARG, QEvent, QItemSelectionModel, QBuffer, QRect
 )
 from PySide6.QtCore import QSortFilterProxyModel
 
@@ -66,17 +66,17 @@ class SmartClipboardApp(MainWindowUI):
         self._ignore_next_clipboard_event = False
         self._is_settings_dialog_open = False
 
-        # Auto-preview on hover
-        self._hover_preview_timer = QTimer(self)
-        self._hover_preview_timer.setSingleShot(True)
-        self._hover_preview_timer.timeout.connect(self._show_hover_preview)
-        self._hide_preview_timer = QTimer(self)
-        self._hide_preview_timer.setSingleShot(True)
-        self._hide_preview_timer.timeout.connect(self._do_hide_preview)
-        self._last_hovered_index = None
+        # Preview dialog (manual trigger only)
         self._current_preview_dialog = None
-        self._preview_mouse_pos = None
-        self._is_mouse_over_preview = False
+        self._preview_source_index = None  # 记录触发预览的卡片索引
+        self._preview_hide_delay_ms = 300  # 延迟关闭时间（毫秒）
+        self._preview_check_interval_ms = 100  # 鼠标位置检测间隔
+        self._preview_hide_timer = QTimer(self)
+        self._preview_hide_timer.setSingleShot(True)
+        self._preview_hide_timer.timeout.connect(self._hide_preview_dialog)
+        self._preview_mouse_timer = QTimer(self)
+        self._preview_mouse_timer.timeout.connect(self._check_preview_should_hide)
+        self._last_main_pos = None  # 用于检测主窗口移动
 
         # Initialize Model and Delegate
         self.model = ClipboardModel(self)
@@ -95,10 +95,6 @@ class SmartClipboardApp(MainWindowUI):
         # Handle click events
         self.list_view.clicked.connect(self._on_list_item_clicked)
 
-        # Handle hover events for auto-preview
-        self.list_view.setMouseTracking(True)
-        self.list_view.viewport().installEventFilter(self)
-
         # Handle context menu
         self.list_view.setContextMenuPolicy(Qt.CustomContextMenu)
         self.list_view.customContextMenuRequested.connect(self._on_context_menu)
@@ -116,7 +112,7 @@ class SmartClipboardApp(MainWindowUI):
         self.search_bar.textChanged.connect(self._on_search_text_changed)
         self.search_bar.returnPressed.connect(self._on_search_return_pressed)
 
-        # Install event filters for Ctrl+F shortcut and hover preview
+        # Install event filters for Ctrl+F shortcut
         self.list_view.installEventFilter(self)
         self.search_bar.installEventFilter(self)
         self.installEventFilter(self)
@@ -148,12 +144,6 @@ class SmartClipboardApp(MainWindowUI):
                 if index.isValid():
                     self._on_list_item_clicked(index)
                 event.accept()
-            elif key == Qt.Key_Space:
-                # Space key to preview
-                index = self.list_view.currentIndex()
-                if index.isValid():
-                    self._on_card_preview(index)
-                event.accept()
             elif key == Qt.Key_Down:
                 # If no item is selected, select the first one
                 current_index = self.list_view.currentIndex()
@@ -174,7 +164,7 @@ class SmartClipboardApp(MainWindowUI):
         self.list_view.keyPressEvent = custom_list_key_press
 
     def eventFilter(self, obj, event):
-        """Event filter for Ctrl+F shortcut, Escape key in search box, and hover preview"""
+        """Event filter for Ctrl+F shortcut and Escape key in search box"""
         if event.type() == QEvent.Type.KeyPress:
             key_event = QKeyEvent(event)
             if key_event.key() == Qt.Key_F and (key_event.modifiers() & Qt.ControlModifier):
@@ -184,18 +174,6 @@ class SmartClipboardApp(MainWindowUI):
             if obj == self.search_bar and key_event.key() == Qt.Key_Escape:
                 self._on_search_escape()
                 return True
-        elif event.type() == QEvent.Type.MouseMove:
-            # Handle mouse hover for auto-preview
-            if obj == self.list_view.viewport():
-                self._handle_mouse_hover(event.position().toPoint())
-        elif event.type() == QEvent.Type.Leave:
-            # Mouse left the list view viewport
-            if obj == self.list_view.viewport():
-                # Cancel hover timer
-                self._hover_preview_timer.stop()
-                self._last_hovered_index = None
-                # Start hide timer to allow mouse to move to preview window
-                self._hide_preview_timer.start(150)
         return super().eventFilter(obj, event)
 
     def _toggle_search_bar(self):
@@ -727,100 +705,19 @@ class SmartClipboardApp(MainWindowUI):
             if self.db_manager.delete_clip(clip_id):
                 self.model.remove_row_by_id(clip_id)
 
-    def _handle_mouse_hover(self, pos):
-        """Handle mouse hover over list view items"""
-        index = self.list_view.indexAt(pos)
-
-        if not index.isValid():
-            # Mouse is not over any item
-            if self._last_hovered_index is not None:
-                # Cancel hover timer
-                self._hover_preview_timer.stop()
-                self._last_hovered_index = None
-                # Start hide timer to allow mouse to move to preview window
-                self._hide_preview_timer.start(150)
-            return
-
-        # Cancel hide timer since we're over an item
-        self._hide_preview_timer.stop()
-
-        # Check if we're hovering over a different item
-        if self._last_hovered_index != index:
-            self._last_hovered_index = index
-            self._preview_mouse_pos = QCursor.pos()
-            # Start timer for 1 second
-            self._hover_preview_timer.start(1000)
-            # Hide previous preview if any
-            self._hide_preview_dialog()
-
-    def _do_hide_preview(self):
-        """Actually hide preview dialog after delay, checking if mouse is over it"""
-        # Check if mouse is over the preview dialog
-        if self._current_preview_dialog:
-            if self._current_preview_dialog.is_mouse_inside():
-                # Mouse is over preview, restart timer to check again later
-                self._hide_preview_timer.start(150)
-                return
-        self._hide_preview_dialog()
-
-    def _show_hover_preview(self):
-        """Show preview dialog after hover delay"""
-        if not self._last_hovered_index or not self._last_hovered_index.isValid():
-            return
-
-        index = self._last_hovered_index
-
-        # Convert proxy model index to source model index if needed
-        if isinstance(index.model(), QSortFilterProxyModel):
-            index = self.proxy_model.mapToSource(index)
-            if not index.isValid():
-                return
-
-        clip_type = index.data(ClipboardModel.RoleType)
-        content = index.data(ClipboardModel.RoleContent)
-
-        # Create and show preview dialog
-        self._current_preview_dialog = PreviewDialog(clip_type, content, self, auto_hide=True)
-
-        # Position dialog at current mouse cursor position (top-left corner aligns with mouse)
-        mouse_pos = QCursor.pos()
-        dialog_size = self._current_preview_dialog.size()
-        screen = QApplication.primaryScreen()
-
-        if screen:
-            screen_geo = screen.geometry()
-
-            # Default: place top-left corner at mouse position
-            x = mouse_pos.x()
-            y = mouse_pos.y()
-
-            # Adjust if goes off right edge -> place to the left of mouse
-            if x + dialog_size.width() > screen_geo.right():
-                x = mouse_pos.x() - dialog_size.width()
-
-            # Adjust if goes off bottom edge -> place above mouse
-            if y + dialog_size.height() > screen_geo.bottom():
-                y = mouse_pos.y() - dialog_size.height()
-
-            # Ensure not off left edge
-            x = max(screen_geo.left(), x)
-
-            # Ensure not off top edge
-            y = max(screen_geo.top(), y)
-
-            self._current_preview_dialog.move(x, y)
-        else:
-            # Fallback: place at mouse position
-            self._current_preview_dialog.move(mouse_pos)
-
-        self._current_preview_dialog.show()
-
     def _hide_preview_dialog(self):
         """Hide and destroy the preview dialog"""
+        # Stop timers first
+        if self._preview_mouse_timer.isActive():
+            self._preview_mouse_timer.stop()
+        if self._preview_hide_timer.isActive():
+            self._preview_hide_timer.stop()
+
         if self._current_preview_dialog:
             self._current_preview_dialog.hide()
             self._current_preview_dialog.deleteLater()
             self._current_preview_dialog = None
+            self._preview_source_index = None
 
     def _on_card_preview(self, index):
         """Show preview dialog for clipboard item (manual trigger)"""
@@ -841,8 +738,21 @@ class SmartClipboardApp(MainWindowUI):
 
         # Show preview dialog
         self._current_preview_dialog = PreviewDialog(clip_type, content, self, auto_hide=False)
+        self._preview_source_index = index  # 记录触发预览的卡片索引
 
         # Position dialog next to main window
+        self._update_preview_position()
+        self._current_preview_dialog.show()
+
+        # Start mouse position monitoring for auto-hide
+        self._last_main_pos = self.pos()
+        self._preview_mouse_timer.start(self._preview_check_interval_ms)
+
+    def _update_preview_position(self):
+        """Update preview dialog position relative to main window"""
+        if not self._current_preview_dialog:
+            return
+
         main_geo = self.geometry()
         preview_x = main_geo.right() + 10
         preview_y = main_geo.top()
@@ -861,7 +771,80 @@ class SmartClipboardApp(MainWindowUI):
                 preview_y = screen_geo.top() + 10
 
         self._current_preview_dialog.move(preview_x, preview_y)
-        self._current_preview_dialog.show()
+
+    def _check_preview_should_hide(self):
+        """Check if mouse has left main window + preview window area"""
+        if not self._current_preview_dialog:
+            self._preview_mouse_timer.stop()
+            return
+
+        # Check if main window has moved, update preview position
+        if self._last_main_pos != self.pos():
+            self._last_main_pos = self.pos()
+            self._update_preview_position()
+
+        mouse_pos = QCursor.pos()
+        main_geo = self.geometry()
+        preview_geo = self._current_preview_dialog.geometry()
+
+        # Check if mouse is in preview window
+        in_preview = preview_geo.contains(mouse_pos)
+        # Check if mouse is in bridge area between windows
+        in_bridge = self._is_in_bridge_area(mouse_pos, main_geo, preview_geo)
+        # Check if mouse is on the source card (the card that triggered preview)
+        in_source_card = self._is_in_source_card(mouse_pos)
+
+        if not in_source_card and not in_preview and not in_bridge:
+            # Mouse left all areas, start hide delay if not already started
+            if not self._preview_hide_timer.isActive():
+                self._preview_hide_timer.start(self._preview_hide_delay_ms)
+        else:
+            # Mouse is in one of the areas, cancel hide delay
+            if self._preview_hide_timer.isActive():
+                self._preview_hide_timer.stop()
+
+    def _is_in_bridge_area(self, pos, main_geo, preview_geo):
+        """Check if mouse is in bridge area between main and preview windows"""
+        # Determine if preview is on left or right of main window
+        if preview_geo.center().x() > main_geo.center().x():
+            # Preview on right
+            bridge_left = main_geo.right()
+            bridge_right = preview_geo.left()
+        else:
+            # Preview on left
+            bridge_left = preview_geo.right()
+            bridge_right = main_geo.left()
+
+        # Vertical overlap with some margin
+        bridge_top = max(main_geo.top(), preview_geo.top()) - 20
+        bridge_bottom = min(main_geo.bottom(), preview_geo.bottom()) + 20
+
+        # Ensure left < right
+        if bridge_left > bridge_right:
+            bridge_left, bridge_right = bridge_right, bridge_left
+
+        return (bridge_left <= pos.x() <= bridge_right and
+                bridge_top <= pos.y() <= bridge_bottom)
+
+    def _is_in_source_card(self, pos):
+        """Check if mouse is on the source card that triggered the preview"""
+        if not self._preview_source_index or not self._preview_source_index.isValid():
+            return False
+
+        # Get the visual rectangle of the source card in the list view
+        # Note: _preview_source_index is a source model index, need to map to proxy
+        proxy_index = self.proxy_model.mapFromSource(self._preview_source_index)
+        if not proxy_index.isValid():
+            return False
+
+        # Get the visual rect of this item in the list view
+        card_rect = self.list_view.visualRect(proxy_index)
+        # Map to global coordinates
+        top_left_global = self.list_view.mapToGlobal(card_rect.topLeft())
+        bottom_right_global = self.list_view.mapToGlobal(card_rect.bottomRight())
+        card_rect_global = QRect(top_left_global, bottom_right_global)
+
+        return card_rect_global.contains(pos)
 
     def _on_card_pin_toggled(self, clip_id, current_pin_status):
         """Toggle pin status"""
@@ -1069,6 +1052,11 @@ class SmartClipboardApp(MainWindowUI):
                 logging.info("Detected stuck Win key, forced release.")
         except Exception:
             pass
+
+    def hideEvent(self, event):
+        """Hide preview dialog immediately when main window is hidden"""
+        super().hideEvent(event)
+        self._hide_preview_dialog()
 
     def show_and_position_window_on_hotkey(self, from_tray=False, force_center=False):
         # 1. Force release Win key to prevent stuck state
