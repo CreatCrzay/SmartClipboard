@@ -12,7 +12,7 @@ import shutil
 import sys
 
 from PySide6.QtWidgets import (
-    QApplication, QMessageBox, QFileDialog, QMenu
+    QApplication, QMessageBox, QFileDialog, QMenu, QListView, QWidget
 )
 from PySide6.QtGui import QAction, QKeyEvent, QImage, QImage, QCursor
 from PySide6.QtCore import (
@@ -126,8 +126,19 @@ class SmartClipboardApp(MainWindowUI):
 
         self.keyboard_controller = Controller()
 
-        self.hotkey_listener = WinHotkeyListener(self)
+        # 回调函数：检查窗口是否可见和获取窗口句柄
+        def is_window_visible():
+            return self.isVisible()
+
+        def get_window_handle():
+            try:
+                return int(self.winId())
+            except Exception:
+                return None
+
+        self.hotkey_listener = WinHotkeyListener(self, window_visible_callback=is_window_visible, window_handle_callback=get_window_handle)
         self.hotkey_listener.hotkeyPressed.connect(self.show_and_position_window_on_hotkey)
+        self.hotkey_listener.navKeyPressed.connect(self._on_nav_key_pressed)
         self.hotkey_listener.start_listening()
         self._perform_startup_clean()
 
@@ -162,6 +173,22 @@ class SmartClipboardApp(MainWindowUI):
                 self._original_list_key_press(event)
 
         self.list_view.keyPressEvent = custom_list_key_press
+
+        # 鼠标点击窗口时启用导航键拦截
+        def on_mouse_press(event):
+            # 启用导航键拦截
+            self.hotkey_listener.enable_nav_intercept()
+            # 调用原始事件处理
+            QListView.mousePressEvent(self.list_view, event)
+
+        self.list_view.mousePressEvent = on_mouse_press
+
+        # 为容器也添加鼠标点击事件
+        def on_container_mouse_press(event):
+            self.hotkey_listener.enable_nav_intercept()
+            QWidget.mousePressEvent(self.container_widget, event)
+
+        self.container_widget.mousePressEvent = on_container_mouse_press
 
     def eventFilter(self, obj, event):
         """Event filter for Ctrl+F shortcut and Escape key in search box"""
@@ -1081,7 +1108,7 @@ class SmartClipboardApp(MainWindowUI):
             if not screen:
                 screen = QApplication.screenAt(QCursor.pos())
 
-            x, y = 0, 0
+            x, y = 0, 0 
             if screen:
                 screen_geometry = screen.geometry()
                 if force_center:
@@ -1106,9 +1133,86 @@ class SmartClipboardApp(MainWindowUI):
             self.move(x, y)
             self.show()
             self.raise_()
-            self.activateWindow()
-
-            # Set focus to list view but do not auto-select any item
-            self.list_view.setFocus()
+            # 不调用 activateWindow() 以避免夺取原窗口焦点
+            # 默认启用导航键拦截
+            self.hotkey_listener.enable_nav_intercept()
             self.list_view.clearSelection()
             self.list_view.setCurrentIndex(self.proxy_model.index(-1, -1))
+
+    def _on_nav_key_pressed(self, vk_code):
+        """处理全局导航键（当窗口不拥有焦点时）"""
+        from PySide6.QtCore import QItemSelectionModel
+
+        # Windows 虚拟键码
+        VK_UP = 0x26
+        VK_DOWN = 0x28
+        VK_RETURN = 0x0D
+        VK_ESCAPE = 0x1B
+        VK_F = 0x46
+
+        if not self.isVisible():
+            return
+
+        # -1 表示焦点离开信号（Alt+Tab 等），-2 表示点击窗口外部
+        if vk_code == -1 or vk_code == -2:
+            self.hotkey_listener.disable_nav_intercept()
+            # 点击外部或按非方向键时只取消拦截，不隐藏窗口
+            return
+
+        # Ctrl+F 打开搜索框
+        if vk_code == VK_F:
+            self._toggle_search_bar()
+            return
+
+        if vk_code == VK_ESCAPE:
+            # ESC 隐藏窗口
+            self.hide()
+            self.hotkey_listener.disable_nav_intercept()
+        elif vk_code == VK_RETURN:
+            # Enter 粘贴选中的项目
+            index = self.list_view.currentIndex()
+            if index.isValid():
+                self._on_list_item_clicked(index)
+        elif vk_code == VK_DOWN:
+            # 向下选择
+            current_index = self.list_view.currentIndex()
+            if not current_index.isValid():
+                # 如果没有选中项，选择第一个
+                if self.proxy_model.rowCount() > 0:
+                    first_index = self.proxy_model.index(0, 0)
+                    self.list_view.setCurrentIndex(first_index)
+                    self.list_view.selectionModel().select(
+                        first_index,
+                        QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows
+                    )
+            else:
+                # 移动到下一行
+                row = current_index.row()
+                if row < self.proxy_model.rowCount() - 1:
+                    next_index = self.proxy_model.index(row + 1, 0)
+                    self.list_view.setCurrentIndex(next_index)
+                    self.list_view.selectionModel().select(
+                        next_index,
+                        QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows
+                    )
+        elif vk_code == VK_UP:
+            # 向上选择
+            current_index = self.list_view.currentIndex()
+            if current_index.isValid():
+                row = current_index.row()
+                if row > 0:
+                    prev_index = self.proxy_model.index(row - 1, 0)
+                    self.list_view.setCurrentIndex(prev_index)
+                    self.list_view.selectionModel().select(
+                        prev_index,
+                        QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows
+                    )
+            if current_index.isValid():
+                row = current_index.row()
+                if row > 0:
+                    prev_index = self.proxy_model.index(row - 1, 0)
+                    self.list_view.setCurrentIndex(prev_index)
+                    self.list_view.selectionModel().select(
+                        prev_index,
+                        QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows
+                    )

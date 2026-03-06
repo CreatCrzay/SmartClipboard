@@ -31,10 +31,14 @@ except ImportError:
 # ============================================================
 
 WH_KEYBOARD_LL = 13
+WH_MOUSE_LL = 14
 WM_KEYDOWN = 0x0100
 WM_KEYUP = 0x0101
 WM_SYSKEYDOWN = 0x0104
 WM_SYSKEYUP = 0x0105
+WM_LBUTTONDOWN = 0x0201
+WM_RBUTTONDOWN = 0x0204
+WM_MBUTTONDOWN = 0x0207
 VK_LWIN = 0x5B
 VK_RWIN = 0x5C
 VK_V = 0x56
@@ -57,11 +61,24 @@ class KBDLLHOOKSTRUCT(ctypes.Structure):
 
 class HotkeyHookWorker(QThread):
     hotkey_triggered = Signal()
+    nav_key_pressed = Signal(int)  # 转发导航键: UP/DOWN/ENTER/ESCAPE, -1=取消拦截, -2=鼠标点击外部
 
-    def __init__(self):
+    # 导航键虚拟键码
+    VK_UP = 0x26
+    VK_DOWN = 0x28
+    VK_RETURN = 0x0D
+    VK_ESCAPE = 0x1B
+    VK_TAB = 0x09
+    VK_MENU = 0x12  # Alt key
+    VK_F = 0x46
+    VK_CONTROL = 0x11
+
+    def __init__(self, window_visible_callback=None, window_handle_callback=None):
         super().__init__()
         self.hook = None
+        self.mouse_hook = None
         self.hook_proc = None
+        self.mouse_hook_proc = None
         self._running = True
         self._v_pressed = False
         # Virtual key codes
@@ -70,9 +87,14 @@ class HotkeyHookWorker(QThread):
         self.VK_RWIN = 0x5C
         # Use 0xFF as dummy key
         self.VK_DUMMY = 0xFF
+        # 回调函数：检查窗口是否可见和获取窗口句柄
+        self._window_visible_callback = window_visible_callback
+        self._window_handle_callback = window_handle_callback
+        # 导航拦截开关
+        self._intercept_nav = False
 
     def run(self):
-        self._setup_hook()
+        self._setup_hooks()
         msg = wintypes.MSG()
         while self._running:
             try:
@@ -84,9 +106,13 @@ class HotkeyHookWorker(QThread):
                 break
             time.sleep(0.005)
 
-    def _setup_hook(self):
+    def _setup_hooks(self):
+        # 键盘钩子
         self.hook_proc = HOOKPROC(self._keyboard_hook_proc)
         self.hook = user32.SetWindowsHookExW(WH_KEYBOARD_LL, self.hook_proc, 0, 0)
+        # 鼠标钩子
+        self.mouse_hook_proc = HOOKPROC(self._mouse_hook_proc)
+        self.mouse_hook = user32.SetWindowsHookExW(WH_MOUSE_LL, self.mouse_hook_proc, 0, 0)
 
     def _send_dummy_key(self):
         """
@@ -99,6 +125,14 @@ class HotkeyHookWorker(QThread):
         except Exception:
             pass
 
+    def _is_nav_key(self, vk_code):
+        """检查是否是导航键"""
+        return vk_code in (self.VK_UP, self.VK_DOWN, self.VK_RETURN, self.VK_ESCAPE)
+
+    def _is_modifier_key(self, vk_code):
+        """检查是否是修饰键（Ctrl, Shift, Alt, Win）"""
+        return vk_code in (0x11, 0x12, 0x10, 0x5B, 0x5C, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5)
+
     def _keyboard_hook_proc(self, nCode, wParam, lParam):
         try:
             if nCode >= 0:
@@ -109,7 +143,7 @@ class HotkeyHookWorker(QThread):
                 is_down = (wParam == WM_KEYDOWN or wParam == WM_SYSKEYDOWN)
                 is_up = (wParam == WM_KEYUP or wParam == WM_SYSKEYUP)
 
-                # Handle V key
+                # ========== 优先处理 Win+V（不受导航键拦截逻辑影响）==========
                 if vk_code == self.VK_V:
                     if is_down:
                         # Check if Win key is pressed
@@ -132,35 +166,109 @@ class HotkeyHookWorker(QThread):
                             self._v_pressed = False
                             return 1
 
+                # ========== 窗口可见时的导航键处理 ==========
+                if self._window_visible_callback and self._window_visible_callback():
+                    # 检测 Alt+Tab 或 Alt+Esc 等窗口切换组合键
+                    if is_down:
+                        alt_pressed = (user32.GetAsyncKeyState(self.VK_MENU) & 0x8000 != 0)
+                        if alt_pressed and vk_code in (self.VK_TAB, self.VK_ESCAPE):
+                            # 焦点即将离开，通知主程序取消拦截
+                            self.nav_key_pressed.emit(-1)
+                            return 0
+
+                    # 只在启用拦截时才处理导航键
+                    if self._intercept_nav:
+                        # 检查是否按下 Ctrl 键
+                        ctrl_pressed = (user32.GetAsyncKeyState(0x11) & 0x8000 != 0)
+
+                        # 处理 Ctrl+F 搜索快捷键
+                        if is_down and ctrl_pressed and vk_code == 0x46:  # F key
+                            self.nav_key_pressed.emit(0x46)  # 发送 F 键信号表示 Ctrl+F
+                            return 1  # 拦截按键
+
+                        # 如果是导航键，拦截并处理
+                        if is_down and self._is_nav_key(vk_code):
+                            self.nav_key_pressed.emit(vk_code)
+                            return 1  # 拦截按键
+
+                        # 如果是非导航键且不是修饰键，取消拦截
+                        # 但如果是带 Ctrl 的组合键，不取消拦截
+                        if is_down and not self._is_nav_key(vk_code) and not self._is_modifier_key(vk_code):
+                            if not ctrl_pressed:  # 只有不带 Ctrl 的按键才取消拦截
+                                self.nav_key_pressed.emit(-1)  # 取消拦截
+                                return 0  # 不拦截，让原窗口处理
+
         except Exception:
             pass
         return user32.CallNextHookEx(self.hook, nCode, wParam, lParam)
+
+    def _mouse_hook_proc(self, nCode, wParam, lParam):
+        """鼠标钩子处理：检测点击窗口外部"""
+        try:
+            if nCode >= 0 and self._intercept_nav and self._window_visible_callback and self._window_visible_callback():
+                # 检查是否是鼠标点击事件
+                if wParam in (WM_LBUTTONDOWN, WM_RBUTTONDOWN, WM_MBUTTONDOWN):
+                    # 获取鼠标位置
+                    class POINT(ctypes.Structure):
+                        _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+                    pt = POINT()
+                    user32.GetCursorPos(ctypes.byref(pt))
+
+                    # 获取剪贴板窗口句柄
+                    clipboard_hwnd = None
+                    if self._window_handle_callback:
+                        clipboard_hwnd = self._window_handle_callback()
+
+                    if clipboard_hwnd and win32gui:
+                        # 获取剪贴板窗口的区域
+                        try:
+                            rect = win32gui.GetWindowRect(clipboard_hwnd)
+                            left, top, right, bottom = rect
+
+                            # 检查鼠标是否在窗口外
+                            if not (left <= pt.x <= right and top <= pt.y <= bottom):
+                                # 点击了窗口外部，发送信号取消拦截
+                                self.nav_key_pressed.emit(-2)  # -2 表示点击外部
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+        return user32.CallNextHookEx(self.mouse_hook, nCode, wParam, lParam)
 
     def stop_hook(self):
         self._running = False
         if self.hook:
             user32.UnhookWindowsHookEx(self.hook)
             self.hook = None
+        if self.mouse_hook:
+            user32.UnhookWindowsHookEx(self.mouse_hook)
+            self.mouse_hook = None
 
 
 class WinHotkeyListener(QObject):
     hotkeyPressed = Signal()
+    navKeyPressed = Signal(int)  # 导航键信号
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, window_visible_callback=None, window_handle_callback=None):
         super().__init__(parent)
         self.worker = None
         self._is_listening = False
+        self._window_visible_callback = window_visible_callback
+        self._window_handle_callback = window_handle_callback
 
     def start_listening(self):
         if not self._is_listening:
-            self.worker = HotkeyHookWorker()
+            self.worker = HotkeyHookWorker(self._window_visible_callback, self._window_handle_callback)
             self.worker.hotkey_triggered.connect(self._on_hotkey_pressed)
+            self.worker.nav_key_pressed.connect(self._on_nav_key_pressed)
             self.worker.start()
             self._is_listening = True
 
     def stop_listening(self):
         if self._is_listening and self.worker:
             self.worker.hotkey_triggered.disconnect()
+            self.worker.nav_key_pressed.disconnect()
             self.worker.stop_hook()
             self.worker.quit()
             self.worker.wait(3000)
@@ -172,6 +280,19 @@ class WinHotkeyListener(QObject):
 
     def _on_hotkey_pressed(self):
         self.hotkeyPressed.emit()
+
+    def _on_nav_key_pressed(self, vk_code):
+        self.navKeyPressed.emit(vk_code)
+
+    def enable_nav_intercept(self):
+        """启用导航键拦截"""
+        if self.worker:
+            self.worker._intercept_nav = True
+
+    def disable_nav_intercept(self):
+        """禁用导航键拦截"""
+        if self.worker:
+            self.worker._intercept_nav = False
 
 
 # ============================================================
