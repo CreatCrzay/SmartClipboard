@@ -104,7 +104,8 @@ class DatabaseManager:
             self.cursor.execute("DELETE FROM clips WHERE id = ?", (clip_id,))
             self.conn.commit()
             if self.cursor.rowcount > 0:
-                logging.info(f"DatabaseManager: Clip ID {clip_id} deleted successfully.")
+                self.conn.execute("VACUUM")
+                logging.info(f"DatabaseManager: Clip ID {clip_id} deleted and database vacuumed.")
                 return True
             else:
                 logging.warning(f"DatabaseManager: Clip ID {clip_id} not found for deletion.")
